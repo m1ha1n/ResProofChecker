@@ -1,0 +1,7 @@
+% Derivation Tree ADT
+deriv_tree[T: TYPE]: DATATYPE 
+  BEGIN
+	  leaf(val: T): leaf?
+		node(val: T, left: deriv_tree, right: deriv_tree): node?   
+   END deriv_tree
+	

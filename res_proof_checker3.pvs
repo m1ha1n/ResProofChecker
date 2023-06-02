@@ -1,0 +1,110 @@
+% 
+% A proof for 1. (p \/ q)               /\ 
+%             2. (not p \/ q)           /\
+%             3. (p \/  not q)          /\
+%             4. (s \/ not p \/ q)      /\
+%             5. (not s \/ p \/ not  q) /\
+%             6. (not p \/ r)           /\
+%             7. (not q \/ not r) 
+% assuming the following encoding for vars : [ p |-> 1, q |-> 2, s |-> 3, r |-> 4 ]
+% is represented as a table of clauses, with each clause as a tuple of literals and BR antecedents
+%  [ 
+%   0: [  1  2     ], []           - given
+%   1: [ -1  2     ], []           - given
+%   2: [  1 -2     ], []           - given
+%   3: [ -1  2  3  ], []           - given     
+%   4: [  1 -2 -3  ], []           - given
+%   5: [ -1  4     ], []           - given
+%   6: [ -2 -4     ], []           - given
+%   7: [  2        ], [  0  1  ]   - derived
+%   8: [  1        ], [  2  7  ]   - derived
+%   9: [  4        ], [  5  7  ]   - derived
+%  10: [ -4        ], [  6  7  ]   - derived
+%  11: []           , [  9 10  ]   - derived
+%  ]
+
+res_proof_checker3 : THEORY
+  BEGIN
+
+  % Variables are encoded as integers starting from 1 
+  % Negative integers denote the negated occurrence of the corresponding variables
+  venc: TYPE = nonzero_integer
+  
+	% Literals in a clause are modeled as a sorted finite sequence
+	ordered?_litseq(ls: finseq[venc]): bool = 
+		(∀ (i, j: below[ls`length]): i <= j ⇒ (abs(ls`seq(i)) <= abs(ls`seq(j))))
+	litseq: TYPE = { ls: finseq[venc] | ordered?_litseq(ls) }
+
+	ordered_suffix: LEMMA
+    ∀ (ls: finseq[venc], i:below[ls`length]):		
+			ordered?_litseq(ls) ⇒ ordered?_litseq(ls^(i, ls`length))
+
+	% At clause representation is a record with literals and the set of antecedents 
+	clause: TYPE = [# lits: litseq, antecedents: finseq[nat] #] 
+			
+	lits_equal?(C1: litseq, C2: litseq): bool = 
+   (C1`length = C2`length) AND (∀ (i: below[C1`length]) : C1`seq(i) = C2`seq(i))
+  
+	% Helper to express the invariant on the order of clauses in the certificate
+	fs_max(fs: finseq[nat], acc: nat): RECURSIVE nat = 
+	  IF fs`length = 0 
+      THEN acc
+      ELSE fs_max(fs^(1, fs`length), max(acc, fs`seq(0)))
+    ENDIF
+    MEASURE length(fs)
+
+	anteced_max(C: clause): nat = fs_max(C`antecedents, 0) 
+
+	% An Unsat Proof Certificate is a finite sequence of clauses, 
+  % where each index of a derived clause is greater than any of the antecedents'indices
+	ordered?_clauses(cs: finseq[clause]): bool = 
+    ∀ (i: below[cs`length]): length(antecedents(cs`seq(i))) > 0 ⇒ i > anteced_max(cs`seq(i))
+	cert: TYPE = { CERT: finseq[clause] | ordered?_clauses(CERT) }
+
+	% Derivation Tree ADT
+	IMPORTING deriv_tree_adt[litseq]
+
+	% Apply Binary Resolution on two clauses
+	resolve(ls1: litseq, ls2: litseq): RECURSIVE litseq =
+    IF (length(ls1) > 0 AND length(ls2) > 0) 
+      THEN (
+        LET x1 = seq(ls1)(0), x2 = seq(ls2)(0) 
+         IN IF (abs(x1) = abs(x2) AND (x1 + x2 = 0))
+              THEN resolve(ls1^(1, length(ls1)), ls2^(1, length(ls2)))
+              ELSIF (abs(x1) = abs(x2) AND (x1 = x2)) 
+                THEN ((# length := 1, seq := (LAMBDA (x: below[1]): x1) #) o
+								       resolve(ls1^(1, length(ls1)), ls2^(1, length(ls2))))
+              ELSIF (abs(x1) < abs(x2))  
+                THEN ((# length := 1, seq := (LAMBDA (x: below[1]): x1) #) o
+								      resolve(ls1^(1, length(ls1)), ls2))
+              ELSE ((# length := 1, seq := (LAMBDA (x: below[1]): x2) #) o
+								    resolve(ls1, ls2^(1, length(ls2))))
+            ENDIF
+      )
+      ELSIF (length(ls1) = 0) THEN ls2
+      ELSE ls1
+    ENDIF
+	  MEASURE (length(ls1) + length(ls2))
+  
+  derivation_tree(CERT: cert, i: below[CERT`length]): RECURSIVE deriv_tree = 	 	      
+	  LET C = CERT`seq(i), ls = C`lits, antes = C`antecedents
+     IN IF antes`length = 0 THEN leaf(ls) 
+        ELSIF (antes`length = 2) 
+          THEN (LET f1idx = antes`seq(0), f2idx = antes`seq(1),
+					          left = derivation_tree(CERT, f1idx), right = derivation_tree(CERT, f2idx)
+                 IN node(resolve(val(left), val(right)), left, right))
+				ELSE leaf(empty_seq)
+        ENDIF
+    MEASURE i
+     		 
+	ec_derivable?(CERT: cert, i: below[CERT`length]): bool = 
+	  LET dt = derivation_tree(CERT, i) IN length(val(dt)) = 0
+
+  check?(CERT: cert) : bool = 
+	  LET ec_idx = length(CERT) - 1 
+     IN ec_derivable?(CERT, ec_idx)
+
+  END res_proof_checker3
+
+
+% SOUNDNESS THM:  |- ∀ φ, CERT : check(CERT) => (¬ φ) 
